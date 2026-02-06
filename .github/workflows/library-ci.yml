@@ -79,14 +79,14 @@ jobs:
           echo "- **Status**: Build & test passed ✅" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
-  # Go: Tag & Release (main only)
+  # Go: Auto-tag & Release (main only)
   # ──────────────────────────────────────────────
-  release-go:
-    if: inputs.language == 'go' && github.ref == 'refs/heads/main' && startsWith(github.ref_name, 'v') == false
+  auto-tag-go:
+    if: inputs.language == 'go' && github.ref == 'refs/heads/main'
     needs: build-go
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - name: Checkout code
@@ -94,19 +94,76 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Calculate next version
+        id: version
+        run: |
+          # Get latest semver tag
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+          echo "Latest tag: $LATEST_TAG"
+
+          # Parse version components
+          VERSION=${LATEST_TAG#v}
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+          PATCH=$(echo $VERSION | cut -d. -f3)
+
+          # Analyze commits since last tag
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:'%s' HEAD)
+          else
+            COMMITS=$(git log --pretty=format:'%s' ${LATEST_TAG}..HEAD)
+          fi
+
+          # Determine bump type from conventional commits
+          if echo "$COMMITS" | grep -qiE 'BREAKING CHANGE|^[a-z]+\!:'; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qiE '^feat'; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+            BUMP="minor"
+          else
+            PATCH=$((PATCH + 1))
+            BUMP="patch"
+          fi
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "Bump: $BUMP → $NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "bump=$BUMP" >> $GITHUB_OUTPUT
+          echo "previous_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Check if tag already exists
+        id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.new_tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.version.outputs.new_tag }} already exists, skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a ${{ steps.version.outputs.new_tag }} -m "Release ${{ steps.version.outputs.new_tag }}"
+          git push origin ${{ steps.version.outputs.new_tag }}
+
       - name: Summary
         run: |
-          echo "### Go Release Info" >> $GITHUB_STEP_SUMMARY
+          echo "### Auto-Tag Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "no tags yet")
-          echo "- **Latest tag**: \`$LATEST_TAG\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Module**: \`$(head -1 go.mod | awk '{print $2}')\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> To release a new version, push a semver tag:" >> $GITHUB_STEP_SUMMARY
-          echo '> ```' >> $GITHUB_STEP_SUMMARY
-          echo "> git tag v1.x.x" >> $GITHUB_STEP_SUMMARY
-          echo "> git push origin v1.x.x" >> $GITHUB_STEP_SUMMARY
-          echo '> ```' >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous tag**: \`${{ steps.version.outputs.previous_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **New tag**: \`${{ steps.version.outputs.new_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bump type**: \`${{ steps.version.outputs.bump }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skipped**: \`${{ steps.check.outputs.exists }}\`" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
   # Go: Create GitHub Release on tag push
@@ -251,12 +308,14 @@ jobs:
           echo "- **Release**: [View release](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
 
   # ──────────────────────────────────────────────
-  # C#: Info on main push (no tag)
+  # C#: Auto-tag & Publish (main only)
   # ──────────────────────────────────────────────
-  release-info-dotnet:
-    if: inputs.language == 'dotnet' && github.ref == 'refs/heads/main' && startsWith(github.ref_name, 'v') == false
+  auto-tag-dotnet:
+    if: inputs.language == 'dotnet' && github.ref == 'refs/heads/main'
     needs: build-dotnet
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -264,16 +323,74 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Calculate next version
+        id: version
+        run: |
+          # Get latest semver tag
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+          echo "Latest tag: $LATEST_TAG"
+
+          # Parse version components
+          VERSION=${LATEST_TAG#v}
+          MAJOR=$(echo $VERSION | cut -d. -f1)
+          MINOR=$(echo $VERSION | cut -d. -f2)
+          PATCH=$(echo $VERSION | cut -d. -f3)
+
+          # Analyze commits since last tag
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:'%s' HEAD)
+          else
+            COMMITS=$(git log --pretty=format:'%s' ${LATEST_TAG}..HEAD)
+          fi
+
+          # Determine bump type from conventional commits
+          if echo "$COMMITS" | grep -qiE 'BREAKING CHANGE|^[a-z]+\!:'; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qiE '^feat'; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+            BUMP="minor"
+          else
+            PATCH=$((PATCH + 1))
+            BUMP="patch"
+          fi
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "Bump: $BUMP → $NEW_TAG"
+          echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
+          echo "bump=$BUMP" >> $GITHUB_OUTPUT
+          echo "previous_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+
+      - name: Check if tag already exists
+        id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.new_tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.version.outputs.new_tag }} already exists, skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create and push tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a ${{ steps.version.outputs.new_tag }} -m "Release ${{ steps.version.outputs.new_tag }}"
+          git push origin ${{ steps.version.outputs.new_tag }}
+
       - name: Summary
         run: |
-          echo "### .NET Release Info" >> $GITHUB_STEP_SUMMARY
+          echo "### Auto-Tag Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "no tags yet")
           echo "- **Package**: \`${{ inputs.package-name }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **Latest tag**: \`$LATEST_TAG\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "> To publish a new version, push a semver tag:" >> $GITHUB_STEP_SUMMARY
-          echo '> ```' >> $GITHUB_STEP_SUMMARY
-          echo "> git tag v1.x.x" >> $GITHUB_STEP_SUMMARY
-          echo "> git push origin v1.x.x" >> $GITHUB_STEP_SUMMARY
-          echo '> ```' >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous tag**: \`${{ steps.version.outputs.previous_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **New tag**: \`${{ steps.version.outputs.new_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bump type**: \`${{ steps.version.outputs.bump }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skipped**: \`${{ steps.check.outputs.exists }}\`" >> $GITHUB_STEP_SUMMARY
