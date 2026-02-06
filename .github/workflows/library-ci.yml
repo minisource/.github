@@ -1,0 +1,279 @@
+name: Library CI
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: "Programming language: 'go' or 'dotnet'"
+        required: true
+        type: string
+      go-version:
+        description: "Go version (e.g. 1.24)"
+        required: false
+        default: "1.24"
+        type: string
+      dotnet-version:
+        description: ".NET SDK version (e.g. 8.0.x)"
+        required: false
+        default: "8.0.x"
+        type: string
+      project-path:
+        description: "Path to .csproj (C#) or module root (Go)"
+        required: false
+        default: "."
+        type: string
+      test-path:
+        description: "Path to test project (C#) or test packages (Go)"
+        required: false
+        default: ""
+        type: string
+      package-name:
+        description: "NuGet package name (C# only)"
+        required: false
+        default: ""
+        type: string
+    secrets:
+      NUGET_API_KEY:
+        required: false
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Go: Build & Test
+  # ──────────────────────────────────────────────
+  build-go:
+    if: inputs.language == 'go'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./... -v -race -coverprofile=coverage.out
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: go-coverage
+          path: coverage.out
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          echo "### Go Library Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Go version**: \`${{ inputs.go-version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: Build & test passed ✅" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # Go: Tag & Release (main only)
+  # ──────────────────────────────────────────────
+  release-go:
+    if: inputs.language == 'go' && github.ref == 'refs/heads/main' && startsWith(github.ref_name, 'v') == false
+    needs: build-go
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Summary
+        run: |
+          echo "### Go Release Info" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "no tags yet")
+          echo "- **Latest tag**: \`$LATEST_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Module**: \`$(head -1 go.mod | awk '{print $2}')\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> To release a new version, push a semver tag:" >> $GITHUB_STEP_SUMMARY
+          echo '> ```' >> $GITHUB_STEP_SUMMARY
+          echo "> git tag v1.x.x" >> $GITHUB_STEP_SUMMARY
+          echo "> git push origin v1.x.x" >> $GITHUB_STEP_SUMMARY
+          echo '> ```' >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # Go: Create GitHub Release on tag push
+  # ──────────────────────────────────────────────
+  release-go-tag:
+    if: inputs.language == 'go' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Validate module builds
+        run: go build ./...
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      - name: Summary
+        run: |
+          echo "### Go Release Published 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Module**: \`$(head -1 go.mod | awk '{print $2}')\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release**: [View release](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # C#: Build & Test
+  # ──────────────────────────────────────────────
+  build-dotnet:
+    if: inputs.language == 'dotnet'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Restore dependencies
+        run: dotnet restore ${{ inputs.project-path }}
+
+      - name: Build
+        run: dotnet build ${{ inputs.project-path }} --no-restore --configuration Release
+
+      - name: Test
+        if: inputs.test-path != ''
+        run: dotnet test ${{ inputs.test-path }} --no-restore --configuration Release --verbosity normal --collect:"XPlat Code Coverage"
+
+      - name: Summary
+        run: |
+          echo "### .NET Library Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **.NET version**: \`${{ inputs.dotnet-version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Project**: \`${{ inputs.project-path }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: Build & test passed ✅" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # C#: Pack & Publish NuGet (tag push only)
+  # ──────────────────────────────────────────────
+  publish-dotnet:
+    if: inputs.language == 'dotnet' && startsWith(github.ref, 'refs/tags/v')
+    needs: build-dotnet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.project-path }}
+
+      - name: Pack
+        run: |
+          dotnet pack ${{ inputs.project-path }} \
+            --configuration Release \
+            --no-restore \
+            -p:PackageVersion=${{ steps.version.outputs.version }} \
+            -o ./nupkg
+
+      - name: Push to NuGet
+        if: secrets.NUGET_API_KEY != ''
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Push to GitHub Packages
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --api-key ${{ github.token }} \
+            --source https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json \
+            --skip-duplicate
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: ./nupkg/*.nupkg
+
+      - name: Summary
+        run: |
+          echo "### NuGet Package Published 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package**: \`${{ inputs.package-name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Release**: [View release](https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }})" >> $GITHUB_STEP_SUMMARY
+
+  # ──────────────────────────────────────────────
+  # C#: Info on main push (no tag)
+  # ──────────────────────────────────────────────
+  release-info-dotnet:
+    if: inputs.language == 'dotnet' && github.ref == 'refs/heads/main' && startsWith(github.ref_name, 'v') == false
+    needs: build-dotnet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Summary
+        run: |
+          echo "### .NET Release Info" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "no tags yet")
+          echo "- **Package**: \`${{ inputs.package-name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Latest tag**: \`$LATEST_TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> To publish a new version, push a semver tag:" >> $GITHUB_STEP_SUMMARY
+          echo '> ```' >> $GITHUB_STEP_SUMMARY
+          echo "> git tag v1.x.x" >> $GITHUB_STEP_SUMMARY
+          echo "> git push origin v1.x.x" >> $GITHUB_STEP_SUMMARY
+          echo '> ```' >> $GITHUB_STEP_SUMMARY
