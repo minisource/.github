@@ -1,0 +1,76 @@
+name: Build and Push Docker Image
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: "Docker image name (e.g. minisource/auth)"
+        required: true
+        type: string
+      dockerfile-path:
+        description: "Path to Dockerfile"
+        required: false
+        default: "./Dockerfile"
+        type: string
+      build-context:
+        description: "Docker build context path"
+        required: false
+        default: "."
+        type: string
+      default-branch:
+        description: "Default branch name (main or master)"
+        required: false
+        default: "main"
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (generate tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image-name }}
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', inputs.default-branch) }}
+            type=sha,prefix=,format=short
+
+      - name: Login to Docker Hub
+        if: github.ref == format('refs/heads/{0}', inputs.default-branch)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile-path }}
+          push: ${{ github.ref == format('refs/heads/{0}', inputs.default-branch) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ inputs.image-name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Branch**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pushed**: \`${{ github.ref == format('refs/heads/{0}', inputs.default-branch) }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
