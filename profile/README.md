@@ -90,6 +90,7 @@ Minisource is a comprehensive microservices ecosystem providing authentication, 
 | **Observability** | Prometheus, Grafana, Loki |
 | **Infrastructure** | Docker, Kubernetes, Terraform |
 | **CI/CD** | GitHub Actions |
+| **Container Registry** | [Docker Hub (`minisource`)](https://hub.docker.com/orgs/minisource/repositories) |
 
 ---
 
@@ -98,7 +99,7 @@ Minisource is a comprehensive microservices ecosystem providing authentication, 
 Each repository contains:
 - 📄 Comprehensive README with setup instructions
 - 🐳 Docker Compose for local development
-- ⚙️ CI/CD workflows with GitHub Actions
+- ⚙️ CI/CD workflows with GitHub Actions (build → push to Docker Hub on `main`)
 - 🔒 Security policy and vulnerability reporting
 - 🧪 Unit and integration tests
 
@@ -114,6 +115,20 @@ docker-compose up -d
 
 # Or run natively
 make run
+```
+
+### Docker Hub CI/CD
+
+Service images are built by GitHub Actions and pushed to Docker Hub after a successful build on the default branch. Configure these repository secrets:
+
+- `DOCKERHUB_USERNAME` — Docker Hub username or organization
+- `DOCKERHUB_TOKEN` — Docker Hub access token
+
+```bash
+# Pull and run a production image
+docker pull minisource/auth:latest
+export TAG=latest
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ---
