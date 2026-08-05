@@ -1,0 +1,71 @@
+# Reusable workflow: build Docker image and push to Docker Hub on version tags.
+# Required repository secrets: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN
+# Images are published under https://hub.docker.com/u/$DOCKERHUB_USERNAME
+
+name: Docker Release
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        description: "Docker image name (e.g. ${{ secrets.DOCKERHUB_USERNAME }}/gateway)"
+        required: true
+        type: string
+      dockerfile-path:
+        description: "Path to Dockerfile"
+        required: false
+        default: "./Dockerfile"
+        type: string
+      build-context:
+        description: "Docker build context path"
+        required: false
+        default: "."
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+      - uses: docker/metadata-action@902fa8ec7d6ecbf5d277c973f4e45e2e2c44bcfd # v5.7.0
+        id: meta
+        with:
+          images: ${{ inputs.image-name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=,format=short
+
+      - uses: docker/login-action@74a5d142397b4f367a81961bb57cd6e8e3276294 # v3.4.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497 # v6.14.0
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile-path }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          echo "### Docker Release 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`${{ inputs.image-name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tags**: ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest**: ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
